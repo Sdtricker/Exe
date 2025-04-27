@@ -2,99 +2,118 @@ import os
 import zipfile
 import rarfile
 import py7zr
-import shutil
-import tempfile
+import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from pdfminer.high_level import extract_text
-import pandas as pd
+from telegram.error import Forbidden
+from PyPDF2 import PdfReader
+from io import BytesIO
 
+# Replace with your actual BOT_TOKEN and CHANNEL_ID
 BOT_TOKEN = '7930776122:AAGtn0YUQ0cDlvudPRrYUGxKBKJkG1IuMlw'
 CHANNEL_ID = '@yyyaoqkka'
 
-# Create a temporary directory for file extraction
+# Initialize the Application object
+app = Application.builder().token(BOT_TOKEN).build()
+
+# File Extraction Function
 def extract_file(file_path):
-    temp_dir = tempfile.mkdtemp()
+    extracted_text = []
 
-    if file_path.endswith('.zip'):
+    if file_path.endswith(".zip"):
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
-    elif file_path.endswith('.rar'):
-        with rarfile.RarFile(file_path, 'r') as rar_ref:
-            rar_ref.extractall(temp_dir)
-    elif file_path.endswith('.7z'):
-        with py7zr.SevenZipFile(file_path, mode='r') as zf:
-            zf.extractall(temp_dir)
-    elif file_path.endswith('.pdf'):
-        # Use pdfminer to extract text from PDFs
-        return extract_text(file_path)
-    elif file_path.endswith('.txt'):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    elif file_path.endswith('.xlsx'):
-        # Use pandas to read Excel file
-        df = pd.read_excel(file_path)
-        return df.to_string()
+            zip_ref.extractall("extracted")
+            for file_name in zip_ref.namelist():
+                extracted_text.extend(extract_text_from_file(f"extracted/{file_name}"))
+    
+    elif file_path.endswith(".rar"):
+        with rarfile.RarFile(file_path) as rar_ref:
+            rar_ref.extractall("extracted")
+            for file_name in rar_ref.namelist():
+                extracted_text.extend(extract_text_from_file(f"extracted/{file_name}"))
+    
+    elif file_path.endswith(".7z"):
+        with py7zr.SevenZipFile(file_path, mode='r') as archive:
+            archive.extractall(path="extracted")
+            for file_name in os.listdir("extracted"):
+                extracted_text.extend(extract_text_from_file(f"extracted/{file_name}"))
+    
+    elif file_path.endswith(".txt"):
+        extracted_text.extend(extract_text_from_file(file_path))
+    
+    elif file_path.endswith(".pdf"):
+        extracted_text.extend(extract_text_from_pdf(file_path))
+    
+    elif file_path.endswith(".xlsx"):
+        extracted_text.extend(extract_text_from_xlsx(file_path))
+    
+    return extracted_text
 
-    # If no format matches, return empty content
-    return None
+# Helper functions for extracting text from files
 
-# Function to send content in chunks to Telegram
-def send_chunks(text, chat_id):
-    words = text.split()
-    chunk_size = 300
-    for i in range(0, len(words), chunk_size):
-        chunk = ' '.join(words[i:i + chunk_size])
-        # Send to channel
-        bot.send_message(chat_id=chat_id, text=chunk)
+def extract_text_from_file(file_path):
+    text = []
+    try:
+        if file_path.endswith('.txt'):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text.append(f.read())
+        elif file_path.endswith('.xlsx'):
+            df = pd.read_excel(file_path)
+            text.append(df.to_string())
+    except Exception as e:
+        print(f"Error extracting from {file_path}: {e}")
+    return text
 
-# Command handler for /start command
+def extract_text_from_pdf(file_path):
+    text = []
+    try:
+        reader = PdfReader(file_path)
+        for page in reader.pages:
+            text.append(page.extract_text())
+    except Exception as e:
+        print(f"Error extracting from PDF {file_path}: {e}")
+    return text
+
+# Function to send extracted text in chunks
+async def send_text_in_chunks(text, update):
+    chunks = [text[i:i + 300] for i in range(0, len(text), 300)]
+    for chunk in chunks:
+        try:
+            await app.bot.send_message(CHANNEL_ID, chunk)
+        except Forbidden:
+            print(f"Bot was blocked by user {update.message.chat_id}")
+            break
+
+# Command to start the bot
 async def start(update: Update, context):
     await update.message.reply_text("Please send a file (zip, rar, 7z, txt, pdf, xlsx). I will extract and send its contents.")
 
-# Handler for file messages
+# Handler to process the file
 async def handle_file(update: Update, context):
     file = update.message.document
-    file_id = file.file_id
-    file_name = file.file_name
-    file_path = f'{file_name}'
-
+    file_path = f"./{file.file_name}"
+    
     # Download the file
-    file = await context.bot.get_file(file_id)
-    await file.download_to_drive(file_path)
+    file_info = await app.bot.get_file(file.file_id)
+    await file_info.download_to_drive(file_path)
 
-    # Extract file content based on its type
-    if file_path.endswith(('.zip', '.rar', '.7z')):
-        extracted_text = ""
-        extracted_text += extract_file(file_path)
-        # Check if there are more files inside
-        for root, dirs, files in os.walk(file_path):
-            for f in files:
-                extracted_text += extract_file(os.path.join(root, f))
+    extracted_text = extract_file(file_path)
 
-        # Send the extracted content to Telegram
-        await send_chunks(extracted_text, CHANNEL_ID)
+    # Send extracted text in chunks
+    for text_chunk in extracted_text:
+        await send_text_in_chunks(text_chunk, update)
 
-        # Clean up
-        shutil.rmtree(file_path)
-    else:
-        # For non-archive files like .txt, .pdf, .xlsx
-        extracted_text = extract_file(file_path)
-        await send_chunks(extracted_text, CHANNEL_ID)
+    # Clean up by deleting the file
+    os.remove(file_path)
 
-        # Clean up
-        os.remove(file_path)
-
-# Main function to set up the bot
+# Main function to add handlers and start the bot
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    # Command and message handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-
-    application.run_polling()
+    # Run the bot
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
-    
+                
