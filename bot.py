@@ -58,10 +58,18 @@ def extract_text_from_file(file_path):
             with open(file_path, 'r', encoding='utf-8') as f:
                 text.append(f.read())
         elif file_path.endswith('.xlsx'):
-            df = pd.read_excel(file_path)
-            text.append(df.to_string())
+            text.extend(extract_text_from_xlsx(file_path))  # Corrected here
     except Exception as e:
         print(f"Error extracting from {file_path}: {e}")
+    return text
+
+def extract_text_from_xlsx(file_path):
+    text = []
+    try:
+        df = pd.read_excel(file_path)
+        text.append(df.to_string())
+    except Exception as e:
+        print(f"Error extracting from Excel file {file_path}: {e}")
     return text
 
 def extract_text_from_pdf(file_path):
@@ -116,4 +124,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-                
+    
