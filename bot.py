@@ -5,7 +5,7 @@ import py7zr
 import shutil
 import tempfile
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from pdfminer.high_level import extract_text
 import pandas as pd
 
@@ -49,19 +49,19 @@ def send_chunks(text, chat_id):
         bot.send_message(chat_id=chat_id, text=chunk)
 
 # Command handler for /start command
-def start(update: Update, context):
-    update.message.reply_text("Please send a file (zip, rar, 7z, txt, pdf, xlsx). I will extract and send its contents.")
+async def start(update: Update, context):
+    await update.message.reply_text("Please send a file (zip, rar, 7z, txt, pdf, xlsx). I will extract and send its contents.")
 
 # Handler for file messages
-def handle_file(update: Update, context):
+async def handle_file(update: Update, context):
     file = update.message.document
     file_id = file.file_id
     file_name = file.file_name
     file_path = f'{file_name}'
 
     # Download the file
-    file = context.bot.get_file(file_id)
-    file.download(file_path)
+    file = await context.bot.get_file(file_id)
+    await file.download_to_drive(file_path)
 
     # Extract file content based on its type
     if file_path.endswith(('.zip', '.rar', '.7z')):
@@ -73,31 +73,28 @@ def handle_file(update: Update, context):
                 extracted_text += extract_file(os.path.join(root, f))
 
         # Send the extracted content to Telegram
-        send_chunks(extracted_text, CHANNEL_ID)
+        await send_chunks(extracted_text, CHANNEL_ID)
 
         # Clean up
         shutil.rmtree(file_path)
     else:
         # For non-archive files like .txt, .pdf, .xlsx
         extracted_text = extract_file(file_path)
-        send_chunks(extracted_text, CHANNEL_ID)
+        await send_chunks(extracted_text, CHANNEL_ID)
 
         # Clean up
         os.remove(file_path)
 
 # Main function to set up the bot
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    global bot
-    bot = updater.bot
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    dp = updater.dispatcher
+    # Command and message handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.document, handle_file))
-
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
+    
