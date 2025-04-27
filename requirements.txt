@@ -4,3 +4,4 @@ rarfile==4.0
 pdfminer.six==20201018
 numpy==1.24.2
 pandas==2.0.3
+pyPDF2
